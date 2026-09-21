@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: kashmakr-gig-c71cd2f2-t1280
+    env: python
+    plan: free
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
