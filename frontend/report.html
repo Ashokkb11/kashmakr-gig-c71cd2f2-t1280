@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deliverable Report</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #1e293b; max-width: 900px; margin: 40px auto; padding: 0 20px; background: #f8fafc; }
+  article { background: #ffffff; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); border: 1px solid #e2e8f0; }
+  h1, h2, h3 { color: #0f172a; margin-top: 1.5em; margin-bottom: 0.5em; }
+  h1 { font-size: 2.2rem; border-bottom: 2px solid #e2e8f0; padding-bottom: 0.3em; }
+  table { border-collapse: collapse; width: 100%; margin: 1.5em 0; }
+  th, td { border: 1px solid #cbd5e1; padding: 10px 14px; text-align: left; }
+  th { background: #f1f5f9; font-weight: 600; }
+  code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+  pre code { display: block; padding: 16px; overflow-x: auto; }
+  blockquote { border-left: 4px solid #3b82f6; margin: 1.5em 0; padding: 0.5em 1em; color: #475569; background: #eff6ff; }
+</style>
+</head>
+<body>
+  <article>
+    <h1>Task 6 Automation Workflow — Enterprise Lead Capture System</h1>
+<h2>Enterprise-Grade Slack-to-Salesforce Lead Capture Automation Specification</h2>
+<p><strong>Prepared for:</strong> CTO, Series B SaaS Startup (Customer Success Platform)
+<strong>Deliverable:</strong> Task 6 Automation Workflow Specification
+<strong>Implementation Platform:</strong> n8n
+<strong>Date:</strong> October 26, 2023
+<strong>Document Version:</strong> 1.0</p>
+<hr />
+<h2>1. Executive Summary</h2>
+<p>This specification details an enterprise-grade automation workflow that bridges the gap between organic Slack-based lead signals and Salesforce CRM. The system automatically captures, validates, enriches, and creates qualified leads in Salesforce when prospects engage in the designated #leads Slack channel. The implementation leverages n8n for robust workflow orchestration, ensuring reliability, security, and scalability for a 150-employee organization processing approximately 500-1,000 lead signals monthly.</p>
+<p><strong>Primary Business Impact:</strong> Eliminates manual data entry, reduces lead response time from hours to seconds, and establishes closed-loop attribution tracking for Slack-sourced opportunities.</p>
+<hr />
+<h2>2. Workflow Architecture</h2>
+<h3>2.1 High-Level System Diagram</h3>
+<pre><code>[Slack #leads Channel] → [n8n Webhook Trigger] → [Data Validation &amp; Enrichment Node] → [Salesforce Lead Creation Node] → [Success/Failure Notification &amp; Audit Logging]
+         ↑                                                                 ↓
+[Error Queue &amp; Retry Mechanism] ←───────────────[Error Handling Node]
+</code></pre>
+<h3>2.2 Core Automation Logic Flow</h3>
+<ol>
+<li><strong>Trigger Detection:</strong> Real-time monitoring of Slack's #leads channel for new messages matching lead criteria.</li>
+<li><strong>Payload Extraction:</strong> Parse message content, user metadata, timestamp, and channel context.</li>
+<li><strong>Data Validation:</strong> Apply business rules to determine if message constitutes a qualified lead signal.</li>
+<li><strong>Data Enrichment:</strong> Augment lead data with internal company information and lead scoring.</li>
+<li><strong>Salesforce Integration:</strong> Create or update Lead/Contact records via Salesforce REST API.</li>
+<li><strong>Confirmation &amp; Logging:</strong> Send success/failure notifications and log all operations for audit.</li>
+</ol>
+<h3>2.3 Component Architecture</h3>
+<ul>
+<li><strong>Trigger Layer:</strong> n8n Webhook node listening to Slack Events API</li>
+<li><strong>Processing Layer:</strong> Custom JavaScript/Code nodes for business logic</li>
+<li><strong>Integration Layer:</strong> Salesforce node with OAuth2 authentication</li>
+<li><strong>Observability Layer:</strong> Logging nodes, metrics collection, and alert routing</li>
+<li><strong>Persistence Layer:</strong> n8n internal execution storage + external audit database</li>
+</ul>
+<hr />
+<h2>3. Trigger Definition</h2>
+<h3>3.1 Primary Trigger Condition</h3>
+<p>The workflow initiates when <strong>ALL</strong> of the following conditions are met in the Slack #leads channel:</p>
+<ol>
+<li><strong>New Message Event:</strong> Slack Events API <code>message.channels</code> event with <code>subtype</code> not present (i.e., not a bot message or system message).</li>
+<li><strong>Channel Match:</strong> <code>channel_id</code> matches the configured #leads channel ID.</li>
+<li><strong>Keyword Presence (Optional):</strong> Message text contains at least one of the configured lead keywords (<code>["interested", "demo", "trial", "pricing", "contact us", "help"]</code>).</li>
+<li><strong>User Exclusion:</strong> Message author is NOT a member of the internal sales team (validated against configured user group ID).</li>
+</ol>
+<h3>3.2 Trigger Payload Structure</h3>
+<pre><code class="language-json">{
+  &quot;token&quot;: &quot;verification_token&quot;,
+  &quot;team_id&quot;: &quot;TXXXXXXXX&quot;,
+  &quot;api_app_id&quot;: &quot;AXXXXXXXX&quot;,
+  &quot;event&quot;: {
+    &quot;type&quot;: &quot;message&quot;,
+    &quot;channel&quot;: &quot;C0XXXXXXX&quot;,
+    &quot;user&quot;: &quot;U0XXXXXXX&quot;,
+    &quot;text&quot;: &quot;Looking for demo scheduling for our team of 50&quot;,
+    &quot;ts&quot;: &quot;1625072400.000100&quot;,
+    &quot;thread_ts&quot;: null
+  },
+  &quot;type&quot;: &quot;event_callback&quot;,
+  &quot;event_id&quot;: &quot;EvXXXXXXXX&quot;,
+  &quot;event_time&quot;: 1625072400
+}
+</code></pre>
+<h3>3.3 Trigger Configuration in n8n</h3>
+<ul>
+<li><strong>Node:</strong> "Webhook" node (HTTP method: POST)</li>
+<li><strong>Path:</strong> <code>/slack/lead-capture</code></li>
+<li><strong>Response Mode:</strong> "Respond to webhook instantly"</li>
+<li><strong>Authentication:</strong> Slack signing secret verification</li>
+<li><strong>Rate Limiting:</strong> 100 requests/minute per Slack workspace</li>
+</ul>
+<hr />
+<h2>4. API Integration &amp; Data Flow</h2>
+<h3>4.1 Slack API Integration</h3>
+<table>
+<thead>
+<tr>
+<th><strong>Aspect</strong></th>
+<th><strong>Specification</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>API Used</strong></td>
+<td>Slack Events API (Real-time events subscription)</td>
+</tr>
+<tr>
+<td><strong>Authentication</strong></td>
+<td>OAuth2 with <code>channels:read</code>, <code>groups:read</code>, <code>users:read</code> scopes</td>
+</tr>
+<tr>
+<td><strong>Request Rate</strong></td>
+<td>1 event per message, burst handling up to 50 events/second</td>
+</tr>
+<tr>
+<td><strong>Payload Size</strong></td>
+<td>Max 4KB per event (Slack API limit)</td>
+</tr>
+<tr>
+<td><strong>Error Handling</strong></td>
+<td>Exponential backoff retry (3 attempts) for API failures</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Data Extraction Process:</strong>
+1. Validate Slack signing secret (<code>x-slack-signature</code> header)
+2. Parse event payload for message content and metadata
+3. Fetch user profile via <code>users.info</code> API for email and company data
+4. Validate channel membership and permissions</p>
+<h3>4.2 Salesforce API Integration</h3>
+<table>
+<thead>
+<tr>
+<th><strong>Aspect</strong></th>
+<th><strong>Specification</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>API Used</strong></td>
+<td>Salesforce REST API v56.0</td>
+</tr>
+<tr>
+<td><strong>Authentication</strong></td>
+<td>OAuth2 JWT Bearer Flow (server-to-server)</td>
+</tr>
+<tr>
+<td><strong>Endpoint</strong></td>
+<td><code>POST /services/data/v56.0/sobjects/Lead</code></td>
+</tr>
+<tr>
+<td><strong>Rate Limits</strong></td>
+<td>15,000 API calls per 24h (Salesforce Enterprise Edition)</td>
+</tr>
+<tr>
+<td><strong>Concurrent Calls</strong></td>
+<td>25 parallel calls (n8n concurrency limit)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Lead Object Mapping:</strong></p>
+<pre><code class="language-javascript">// n8n JavaScript node transformation
+const leadRecord = {
+  &quot;Company&quot;: extractedCompany || &quot;Unknown&quot;,
+  &quot;LastName&quot;: extractedLastName || &quot;Slack User&quot;,
+  &quot;FirstName&quot;: extractedFirstName || &quot;&quot;,
+  &quot;Email&quot;: extractedEmail || null,
+  &quot;LeadSource&quot;: &quot;Slack #leads&quot;,
+  &quot;Status&quot;: &quot;New&quot;,
+  &quot;Description&quot;: `Slack lead from ${channelName} at ${timestamp}:\n${messageText}`,
+  &quot;Slack_User_ID__c&quot;: slackUserId,
+  &quot;Slack_Message_TS__c&quot;: messageTimestamp,
+  &quot;Slack_Channel_ID__c&quot;: channelId,
+  &quot;AnnualRevenue&quot;: estimatedRevenue || null,
+  &quot;NumberOfEmployees&quot;: estimatedEmployees || null
+};
+</code></pre>
+<h3>4.3 Data Enrichment Services</h3>
+<ul>
+<li><strong>Clearbit Enrichment:</strong> Optional enrichment via Clearbit API (company domain → revenue, employee count)</li>
+<li><strong>Internal CRM Lookup:</strong> Check for existing contacts/leads to prevent duplicates</li>
+<li><strong>Lead Scoring:</strong> Assign score (0-100) based on message intent, company size, and engagement history</li>
+</ul>
+<p><strong>Enrichment Logic Flow:</strong></p>
+<pre><code>Raw Slack Data → Company Extraction → Domain Lookup → Clearbit API → Score Calculation → Salesforce Mapping
+</code></pre>
+<hr />
+<h2>5. Error Handling &amp; Resilience</h2>
+<h3>5.1 Retry Mechanism</h3>
+<table>
+<thead>
+<tr>
+<th><strong>Error Type</strong></th>
+<th><strong>Retry Policy</strong></th>
+<th><strong>Escalation Path</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Transient API Error</strong> (5xx, rate limits)</td>
+<td>Exponential backoff: 1s, 5s, 30s</td>
+<td>After 3 failures → Error Queue</td>
+</tr>
+<tr>
+<td><strong>Data Validation Error</strong> (missing email)</td>
+<td>No retry</td>
+<td>Immediate notification to sales ops</td>
+</tr>
+<tr>
+<td><strong>Salesforce Validation Rules</strong></td>
+<td>No retry</td>
+<td>Log error, notify record owner</td>
+</tr>
+<tr>
+<td><strong>Network Timeout</strong></td>
+<td>Linear backoff: 2s, 4s, 8s</td>
+<td>After 3 failures → Manual review queue</td>
+</tr>
+</tbody>
+</table>
+<h3>5.2 Error Queue Implementation</h3>
+<ul>
+<li><strong>Technology:</strong> n8n "Wait" node + external PostgreSQL table for error persistence</li>
+<li><strong>Retention:</strong> 30 days for failed executions</li>
+<li><strong>Manual Review:</strong> Daily report of unprocessed leads to sales operations team</li>
+<li><strong>Recovery Process:</strong> Manual intervention with ability to reprocess with corrected data</li>
+</ul>
+<h3>5.3 Circuit Breaker Pattern</h3>
+<pre><code class="language-javascript">// Circuit breaker implementation for external APIs
+const circuitBreaker = {
+  state: 'CLOSED',
+  failureCount: 0,
+  threshold: 5,
+  resetTimeout: 60000, // 60 seconds
+  lastFailureTime: null
+};
+</code></pre>
+<p><strong>States:</strong>
+- <strong>CLOSED:</strong> Normal operation, requests pass through
+- <strong>OPEN:</strong> Service unavailable, fail fast without API call
+- <strong>HALF-OPEN:</strong> Limited requests to test if service recovered</p>
+<h3>5.4 Dead Letter Queue (DLQ)</h3>
+<ul>
+<li><strong>Purpose:</strong> Capture permanently failed lead processing events</li>
+<li><strong>Storage:</strong> AWS S3 or equivalent (encrypted at rest)</li>
+<li><strong>Access:</strong> Restricted to DevOps and security teams only</li>
+<li><strong>Analysis:</strong> Monthly review for systemic integration issues</li>
+</ul>
+<hr />
+<h2>6. Security &amp; Compliance</h2>
+<h3>6.1 Authentication Standards</h3>
+<table>
+<thead>
+<tr>
+<th><strong>Component</strong></th>
+<th><strong>Authentication Method</strong></th>
+<th><strong>Secret Management</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Slack API</strong></td>
+<td>OAuth2 tokens</td>
+<td>HashiCorp Vault or AWS Secrets Manager</td>
+</tr>
+<tr>
+<td><strong>Salesforce API</strong></td>
+<td>JWT Bearer Flow</td>
+<td>Private key stored in secure vault</td>
+</tr>
+<tr>
+<td><strong>n8n Webhook</strong></td>
+<td>Slack signing secret</td>
+<td>Environment variables (encrypted)</td>
+</tr>
+<tr>
+<td><strong>Database</strong></td>
+<td>IAM roles or service accounts</td>
+<td>Temporary credentials only</td>
+</tr>
+</tbody>
+</table>
+<h3>6.2 Encryption Protocols</h3>
+<ul>
+<li><strong>In Transit:</strong> TLS 1.3 for all external communications</li>
+<li><strong>At Rest:</strong> AES-256 encryption for stored credentials and audit logs</li>
+<li><strong>Payload Security:</strong> Never log full API payloads containing PII</li>
+<li><strong>Key Rotation:</strong> Automated 90-day rotation for all OAuth tokens</li>
+</ul>
+<h3>6.3 Audit Logging Requirements</h3>
+<p><strong>Log Fields (per execution):</strong>
+- Execution ID (UUID)
+- Timestamp (ISO 8601)
+- Slack user ID (hashed)
+- Channel ID
+- Message timestamp
+- Processing status (success/failure)
+- Salesforce record ID (if created)
+- Error details (if failed)
+- Processing duration
+- Enrichment data sources used</p>
+<p><strong>Retention Policy:</strong> 365 days in centralized logging (Splunk/DataDog)</p>
+<h3>6.4 Compliance Considerations</h3>
+<ul>
+<li><strong>GDPR:</strong> Right to erasure implemented via Salesforce record deletion cascade</li>
+<li><strong>CCPA:</strong> Opt-out mechanism for California residents</li>
+<li><strong>SOC 2:</strong> All access logs retained for 90 days minimum</li>
+<li><strong>Data Residency:</strong> All data processed in US-East-1 region (client's primary region)</li>
+</ul>
+<h3>6.5 Access Controls</h3>
+<ul>
+<li><strong>Role-Based Access Control (RBAC):</strong></li>
+<li><strong>Admin:</strong> Full workflow configuration access</li>
+<li><strong>Operator:</strong> View executions, retry failed items</li>
+<li><strong>Viewer:</strong> Read-only access to metrics and logs</li>
+<li><strong>Principle of Least Privilege:</strong> Each service has minimum required permissions</li>
+<li><strong>Multi-Factor Authentication:</strong> Required for all administrative access</li>
+</ul>
+<hr />
+<h2>7. Scalability Considerations</h2>
+<h3>7.1 Throughput Analysis</h3>
+<table>
+<thead>
+<tr>
+<th><strong>Metric</strong></th>
+<th><strong>Current Volume</strong></th>
+<th><strong>Peak Capacity</strong></th>
+<th><strong>Scaling Trigger</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Messages/Day</strong></td>
+<td>30-50</td>
+<td>500</td>
+<td>&gt;80% capacity for 7 days</td>
+</tr>
+<tr>
+<td><strong>API Calls/Hour</strong></td>
+<td>60-100</td>
+<td>1,000</td>
+<td>&gt;75% utilization for 24h</td>
+</tr>
+<tr>
+<td><strong>Concurrent Executions</strong></td>
+<td>1-5</td>
+<td>50</td>
+<td>&gt;40 concurrent executions</td>
+</tr>
+<tr>
+<td><strong>Data Processing Time</strong></td>
+<td>2-5 seconds</td>
+<td>10 seconds (95th %ile)</td>
+<td>&gt;8 seconds average</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Source:</strong> Based on client's reported 150 employees with 20% in sales [UNVERIFIED]</p>
+<h3>7.2 Concurrency Handling</h3>
+<ul>
+<li><strong>n8n Configuration:</strong> Execution mode set to "Queue" with 25 concurrent executions</li>
+<li><strong>API Rate Limit Management:</strong> Token bucket algorithm for Salesforce API calls</li>
+<li><strong>Database Connections:</strong> Connection pool with max 20 connections</li>
+<li><strong>Memory Allocation:</strong> 2GB RAM minimum for n8n instance</li>
+</ul>
+<h3>7.3 Scaling Strategy</h3>
+<p><strong>Horizontal Scaling Approach:</strong>
+1. <strong>Initial:</strong> Single n8n instance with auto-scaling group (min 1, max 3)
+2. <strong>Growth Phase:</strong> Add read replicas for audit database
+3. <strong>Enterprise Scale:</strong> Multiple n8n instances behind load balancer with Redis for distributed locking</p>
+<p><strong>Capacity Planning Projections:</strong>
+- <strong>Year 1:</strong> 500 leads/month → Single instance sufficient
+- <strong>Year 2:</strong> 2,000 leads/month → Add second instance
+- <strong>Year 3:</strong> 5,000+ leads/month → Multi-region deployment consideration</p>
+<h3>7.4 Bottleneck Identification &amp; Mitigation</h3>
+<table>
+<thead>
+<tr>
+<th><strong>Potential Bottleneck</strong></th>
+<th><strong>Monitoring Metric</strong></th>
+<th><strong>Mitigation Strategy</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Salesforce API Limits</strong></td>
+<td>API calls per 24h</td>
+<td>Implement request queuing with priority</td>
+</tr>
+<tr>
+<td><strong>Database Write Latency</strong></td>
+<td>Write latency &gt; 100ms</td>
+<td>Add database indexing, batch inserts</td>
+</tr>
+<tr>
+<td><strong>External API Response Time</strong></td>
+<td>P95 &gt; 2 seconds</td>
+<td>Implement caching, circuit breakers</td>
+</tr>
+<tr>
+<td><strong>n8n Execution Queue</strong></td>
+<td>Queue depth &gt; 100</td>
+<td>Scale horizontally, optimize node logic</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>8. Monitoring &amp; Alerting</h2>
+<h3>8.1 Key Performance Indicators (KPIs)</h3>
+<table>
+<thead>
+<tr>
+<th><strong>KPI</strong></th>
+<th><strong>Target</strong></th>
+<th><strong>Alert Threshold</strong></th>
+<th><strong>Measurement Method</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Lead Capture Rate</strong></td>
+<td>&gt;95%</td>
+<td>&lt;90% for 1 hour</td>
+<td>(Leads Created / Valid Messages) × 100 [CALC]</td>
+</tr>
+<tr>
+<td><strong>Processing Time (P95)</strong></td>
+<td>&lt;10 seconds</td>
+<td>&gt;15 seconds for 30min</td>
+<td>End-to-end workflow duration</td>
+</tr>
+<tr>
+<td><strong>Error Rate</strong></td>
+<td>&lt;2%</td>
+<td>&gt;5% for 1 hour</td>
+<td>(Failed Executions / Total) × 100 [CALC]</td>
+</tr>
+<tr>
+<td><strong>Data Enrichment Success</strong></td>
+<td>&gt;80%</td>
+<td>&lt;70% for 24h</td>
+<td>(Enriched Leads / Total Leads) × 100 [CALC]</td>
+</tr>
+<tr>
+<td><strong>Salesforce API Latency</strong></td>
+<td>&lt;500ms</td>
+<td>&gt;1000ms for 15min</td>
+<td>Salesforce REST API response time</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Note:</strong> All percentage groups sum to 100% where applicable [CALC]</p>
+<h3>8.2 Dashboard Configuration</h3>
+<p><strong>Primary Dashboard (Sales Ops View):</strong>
+- Real-time lead capture metrics
+- Today's leads by source and status
+- Processing pipeline health
+- Top error types and resolution rates
+- Lead-to-opportunity conversion tracking</p>
+<p><strong>Technical Dashboard (DevOps View):</strong>
+- API rate limit utilization
+- System resource consumption
+- Queue depth and processing latency
+- Error breakdown by component
+- Audit log volume and retention</p>
+<h3>8.3 Alert Thresholds &amp; Escalation</h3>
+<table>
+<thead>
+<tr>
+<th><strong>Alert Severity</strong></th>
+<th><strong>Condition</strong></th>
+<th><strong>Notification Channel</strong></th>
+<th><strong>Response Time SLA</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Critical</strong></td>
+<td>Zero leads processed in 30min</td>
+<td>PagerDuty → On-call engineer</td>
+<td>15 minutes</td>
+</tr>
+<tr>
+<td><strong>High</strong></td>
+<td>Error rate &gt;10% for 30min</td>
+<td>Slack #alerts + Email</td>
+<td>1 hour</td>
+</tr>
+<tr>
+<td><strong>Medium</strong></td>
+<td>Processing time P95 &gt;15s for 1h</td>
+<td>Slack #alerts</td>
+<td>4 hours</td>
+</tr>
+<tr>
+<td><strong>Low</strong></td>
+<td>Enrichment rate &lt;70% for 24h</td>
+<td>Weekly report</td>
+<td>Next business day</td>
+</tr>
+</tbody>
+</table>
+<h3>8.4 Logging Strategy</h3>
+<ul>
+<li><strong>Structured Logging:</strong> JSON format for all application logs</li>
+<li><strong>Centralized Aggregation:</strong> All logs forwarded to DataDog/Splunk</li>
+<li><strong>Retention:</strong> 30 days hot storage, 1 year cold storage</li>
+<li><strong>Cost Control:</strong> Log sampling for verbose debug logs (10% sample rate)</li>
+</ul>
+<hr />
+<h2>9. Deployment Strategy</h2>
+<h3>9.1 CI/CD Pipeline</h3>
+<pre><code>[Development] → [Code Review] → [Automated Testing] → [Staging Deployment] → [Production Deployment]
+</code></pre>
+<p><strong>Pipeline Stages:</strong>
+1. <strong>Development:</strong> n8n workflow JSON exported from development instance
+2. <strong>Code Review:</strong> GitHub Pull Request with workflow changes + documentation
+3. <strong>Automated Testing:</strong> 
+   - Unit tests for custom JavaScript nodes
+   - Integration tests with Slack/Salesforce sandboxes
+   - Load tests simulating peak traffic
+4. <strong>Staging Deployment:</strong> Automated deployment to staging n8n instance
+5. <strong>Production Deployment:</strong> Blue-green deployment with traffic switching</p>
+<h3>9.2 Version Control</h3>
+<ul>
+<li><strong>Workflow Definitions:</strong> Stored as JSON in GitHub repository</li>
+<li><strong>Configuration:</strong> Environment-specific config in GitHub with encryption</li>
+<li><strong>Infrastructure as Code:</strong> Terraform for n8n infrastructure</li>
+<li><strong>Change Management:</strong> All changes via PR with required approvals</li>
+</ul>
+<h3>9.3 Rollback Procedures</h3>
+<p><strong>Automated Rollback Triggers:</strong>
+1. Error rate increase &gt;20% post-deployment
+2. Critical alert firing within 30 minutes of deployment
+3. Manual rollback initiated by release manager</p>
+<p><strong>Rollback Process:</strong>
+1. Traffic routed back to previous version
+2. Failed deployment marked for investigation
+3. Post-mortem initiated within 24 hours
+4. Fix deployed via hotfix pipeline</p>
+<h3>9.4 Deployment Schedule</h3>
+<ul>
+<li><strong>Standard Changes:</strong> Weekly deployment window (Saturday 2:00-4:00 AM EST)</li>
+<li><strong>Emergency Fixes:</strong> Any time with on-call approval</li>
+<li><strong>Major Releases:</strong> Monthly with extended testing and stakeholder sign-off</li>
+</ul>
+<h3>9.5 Disaster Recovery</h3>
+<p><strong>Recovery Time Objective (RTO):</strong> 4 hours for full workflow restoration
+<strong>Recovery Point Objective (RPO):</strong> 15 minutes of data loss maximum</p>
+<p><strong>DR Strategy:</strong>
+1. <strong>Backup:</strong> Daily backups of n8n database and workflow configurations
+2. <strong>Replication:</strong> Cross-region replication of critical data stores
+3. <strong>Failover:</strong> Automated DNS failover to secondary region
+4. <strong>Testing:</strong> Quarterly DR drills with measured recovery times</p>
+<hr />
+<h2>10. Implementation Timeline &amp; Resource Allocation</h2>
+<h3>10.1 Phase-Based Implementation</h3>
+<table>
+<thead>
+<tr>
+<th><strong>Phase</strong></th>
+<th><strong>Duration</strong></th>
+<th><strong>Key Deliverables</strong></th>
+<th><strong>Resource Requirements</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Phase 1: Foundation</strong></td>
+<td>Week 1</td>
+<td>Slack &amp; Salesforce API connectivity, basic workflow</td>
+<td>DevOps Engineer (1), Security Review</td>
+</tr>
+<tr>
+<td><strong>Phase 2: Core Logic</strong></td>
+<td>Week 2</td>
+<td>Lead validation, enrichment, error handling</td>
+<td>DevOps Engineer (1), Salesforce Admin</td>
+</tr>
+<tr>
+<td><strong>Phase 3: Resilience</strong></td>
+<td>Week 3</td>
+<td>Retry mechanisms, monitoring, alerting</td>
+<td>DevOps Engineer (1), SRE</td>
+</tr>
+<tr>
+<td><strong>Phase 4: Deployment</strong></td>
+<td>Week 4</td>
+<td>CI/CD pipeline, documentation, training</td>
+<td>DevOps Engineer (1), Technical Writer</td>
+</tr>
+<tr>
+<td><strong>Phase 5: Optimization</strong></td>
+<td>Weeks 5-6</td>
+<td>Performance tuning, scaling tests</td>
+<td>DevOps Engineer (0.5), Sales Ops</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Total Estimated Effort:</strong> 4.5 person-weeks
+**</p>
+  </article>
+</body>
+</html>
